@@ -71,6 +71,19 @@ class Settings:
     document_gemini_model: str
     ocr_with_gemini: bool
     enable_docs: bool
+    report_upload_token: str | None
+    report_share_signing_secret: str | None
+    report_share_public_base_url: str | None
+    report_share_storage_backend: str
+    report_share_storage_endpoint_url: str | None
+    report_share_storage_region: str
+    report_share_storage_bucket: str | None
+    report_share_storage_access_key_id: str | None
+    report_share_storage_secret_access_key: str | None
+    report_share_local_dir: str
+    report_share_max_bundle_bytes: int
+    report_share_max_uncompressed_bytes: int
+    report_share_max_entries: int
 
 
 def load_settings() -> Settings:
@@ -122,4 +135,35 @@ def load_settings() -> Settings:
         ).strip(),
         ocr_with_gemini=ocr_enabled,
         enable_docs=_bool_env("ENABLE_API_DOCS", False),
+        report_upload_token=os.getenv("REPORT_UPLOAD_TOKEN") or None,
+        report_share_signing_secret=os.getenv("REPORT_SHARE_SIGNING_SECRET") or None,
+        report_share_public_base_url=(
+            os.getenv("REPORT_SHARE_PUBLIC_BASE_URL", "").strip().rstrip("/") or None
+        ),
+        report_share_storage_backend=os.getenv(
+            "REPORT_SHARE_STORAGE_BACKEND", "r2"
+        ).strip().lower(),
+        report_share_storage_endpoint_url=(
+            os.getenv("REPORT_SHARE_STORAGE_ENDPOINT_URL", "").strip().rstrip("/") or None
+        ),
+        report_share_storage_region=os.getenv(
+            "REPORT_SHARE_STORAGE_REGION", "auto"
+        ).strip() or "auto",
+        report_share_storage_bucket=os.getenv("REPORT_SHARE_STORAGE_BUCKET") or None,
+        report_share_storage_access_key_id=(
+            os.getenv("REPORT_SHARE_STORAGE_ACCESS_KEY_ID") or None
+        ),
+        report_share_storage_secret_access_key=(
+            os.getenv("REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY") or None
+        ),
+        report_share_local_dir=os.getenv(
+            "REPORT_SHARE_LOCAL_DIR", ".report-share-storage"
+        ).strip() or ".report-share-storage",
+        report_share_max_bundle_bytes=_int_env(
+            "REPORT_SHARE_MAX_BUNDLE_BYTES", 15 * 1024 * 1024, 1024 * 1024, 50 * 1024 * 1024
+        ),
+        report_share_max_uncompressed_bytes=_int_env(
+            "REPORT_SHARE_MAX_UNCOMPRESSED_BYTES", 60 * 1024 * 1024, 5 * 1024 * 1024, 200 * 1024 * 1024
+        ),
+        report_share_max_entries=_int_env("REPORT_SHARE_MAX_ENTRIES", 120, 4, 500),
     )

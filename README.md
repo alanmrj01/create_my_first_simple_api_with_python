@@ -171,3 +171,30 @@ Para imagens e PDFs processados, cada item retorna:
 A rota de visualização responde com `Content-Disposition: inline`. A rota do
 arquivo original responde com `Content-Disposition: attachment`, portanto não
 há download automático ao abrir a prévia.
+
+## Compartilhamento temporário do CENTRAL ANAYTICS (48 horas)
+
+A API central publica uma cópia estática do relatório em um bucket privado e
+entrega um link público assinado. O destinatário não informa login, senha ou
+token: possuir o link é suficiente durante as 48 horas de validade.
+
+Fluxo:
+
+- `POST /api/reports/share`: protegido por Bearer `REPORT_UPLOAD_TOKEN` (ou
+  `API_SECRET_TOKEN` como compatibilidade). Recebe o ZIP estático do relatório.
+- `GET /relatorios/{token}`: público, sem credenciais, válido exatamente por 48h.
+- `DELETE /api/reports/share/{token}`: protegido e usado pelo ERP para revogar.
+
+As credenciais do bucket, o segredo de assinatura e os tokens principais nunca
+são incorporados ao relatório nem devolvidos nas respostas públicas. O token do
+link é aleatório, assinado e contém apenas identificador e validade.
+
+### Configuração de produção
+
+Crie um bucket privado no Cloudflare R2 (ou S3 compatível) e configure no Render
+as variáveis `REPORT_SHARE_*` descritas em `.env.example`. Recomenda-se também
+uma regra de ciclo de vida no bucket para apagar objetos após 2 dias. Mesmo sem
+a regra, a API rejeita o acesso assim que as 48 horas terminam.
+
+`REPORT_UPLOAD_TOKEN` deve ser diferente do segredo de assinatura. O mesmo
+`REPORT_UPLOAD_TOKEN` deve ser configurado no ERP local para publicar e revogar.

@@ -1,0 +1,18 @@
+API CENTRAL 2.1 — COMPARTILHAMENTO DO CENTRAL ANAYTICS
+======================================================
+
+Escopo cirúrgico desta versão:
+- publicação protegida do pacote estático do relatório;
+- link público sem solicitação de credenciais ao destinatário;
+- validade fixa e exata de 48 horas;
+- data/hora de expiração devolvida ao ERP e exibida no relatório;
+- revogação antecipada pelo ERP;
+- armazenamento privado Cloudflare R2/S3;
+- token de publicação, segredo de assinatura e credenciais do bucket mantidos
+  exclusivamente em variáveis privadas;
+- nenhuma alteração nos contratos legados /api/bridge, /api/executar e anexos.
+
+Endpoints adicionados:
+POST   /api/reports/share             (protegido)
+DELETE /api/reports/share/{token}     (protegido)
+GET    /relatorios/{token}            (público durante 48 horas)

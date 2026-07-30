@@ -885,3 +885,165 @@ def test_image_ocr_success_has_explicit_status_and_interpretation(configured_set
     assert result.download_status == 200
     assert result.evidencias
     assert "decisão final permanece no ERP" in result.interpretacao
+
+
+def _minimal_report_bundle() -> bytes:
+    import json
+    import zipfile
+
+    buffer = BytesIO()
+    report = {
+        "metadata": {
+            "title": "Parecer técnico",
+            "period": "01/05/2026 a 30/07/2026",
+            "generatedAt": "30/07/2026 15:00",
+            "site": "Todas",
+            "source": "Fracttal One",
+            "version": "Rev. 01",
+        },
+        "executiveMetrics": [],
+        "sensors": [],
+        "completedOrders": [],
+        "pendingTasks": [],
+        "generation": {"status": "ready", "progress": 100, "message": "Pronto", "updatedAt": "2026-07-30T15:00:00-03:00"},
+    }
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", "<!doctype html><script src='./assets/app.js'></script>")
+        archive.writestr("assets/app.js", "fetch('./report-data.json')")
+        archive.writestr("assets/app.css", "body{}")
+        archive.writestr("report-data.json", json.dumps(report))
+    return buffer.getvalue()
+
+
+def test_report_share_is_public_for_48_hours_without_recipient_credentials(client, configured_settings, monkeypatch, tmp_path):
+    from app.report_sharing import build_report_store
+
+    share_settings = replace(
+        configured_settings,
+        report_upload_token="report-upload-secret",
+        report_share_signing_secret="server-side-signing-secret-with-more-than-32-chars",
+        report_share_public_base_url="https://conversor-siff.onrender.com",
+        report_share_storage_backend="local",
+        report_share_local_dir=str(tmp_path / "reports"),
+    )
+    monkeypatch.setattr(main, "settings", share_settings)
+    build_report_store.cache_clear()
+
+    response = client.post(
+        "/api/reports/share",
+        headers={
+            "Authorization": "Bearer report-upload-secret",
+            "Content-Type": "application/zip",
+            "X-Report-Name": "CENTRAL ANAYTICS",
+            "X-Report-Period": "01/05/2026 a 30/07/2026",
+        },
+        content=_minimal_report_bundle(),
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["valid_hours"] == 48
+    assert body["requires_credentials"] is False
+    assert body["share_url"].startswith("https://conversor-siff.onrender.com/relatorios/")
+    assert "report-upload-secret" not in response.text
+    assert "server-side-signing-secret" not in response.text
+
+    token = body["share_token"]
+    assert body["share_url"].endswith("/")
+    redirect = client.get(f"/relatorios/{token}", follow_redirects=False)
+    assert redirect.status_code == 307
+    assert redirect.headers["location"] == f"/relatorios/{token}/"
+
+    public_html = client.get(body["share_url"])
+    assert public_html.status_code == 200
+    assert "Authorization" not in public_html.request.headers
+    assert public_html.headers["referrer-policy"] == "no-referrer"
+    assert public_html.headers["cache-control"] == "no-store"
+    assert "frame-ancestors 'none'" in public_html.headers["content-security-policy"]
+    assert "report-upload-secret" not in public_html.text
+    assert "server-side-signing-secret" not in public_html.text
+    public_js = client.get(f"/relatorios/{token}/assets/app.js")
+    assert public_js.status_code == 200
+    assert "fetch('./report-data.json')" in public_js.text
+
+    public_data = client.get(f"/relatorios/{token}/report-data.json")
+    assert public_data.status_code == 200
+    sharing = public_data.json()["sharing"]
+    assert sharing["validHours"] == 48
+    assert sharing["requiresCredentials"] is False
+    assert sharing["publicAccess"] is True
+    assert sharing["expiresAt"] == body["expires_at"]
+
+
+def test_report_share_creation_and_revocation_require_upload_token(client, configured_settings, monkeypatch, tmp_path):
+    from app.report_sharing import build_report_store
+
+    share_settings = replace(
+        configured_settings,
+        report_upload_token="dedicated-token",
+        report_share_signing_secret="another-server-side-signing-secret-long-enough",
+        report_share_storage_backend="local",
+        report_share_local_dir=str(tmp_path / "reports"),
+    )
+    monkeypatch.setattr(main, "settings", share_settings)
+    build_report_store.cache_clear()
+
+    denied = client.post("/api/reports/share", content=_minimal_report_bundle())
+    assert denied.status_code == 401
+
+    created = client.post(
+        "/api/reports/share",
+        headers={"Authorization": "Bearer dedicated-token", "Content-Type": "application/zip"},
+        content=_minimal_report_bundle(),
+    )
+    assert created.status_code == 201
+    token = created.json()["share_token"]
+    assert client.delete(f"/api/reports/share/{token}").status_code == 401
+    assert client.delete(
+        f"/api/reports/share/{token}",
+        headers={"Authorization": "Bearer dedicated-token"},
+    ).status_code == 200
+    assert client.get(f"/relatorios/{token}").status_code == 404
+
+
+def test_report_token_expires_exactly_after_48_hours(configured_settings, tmp_path):
+    from app.report_sharing import (
+        REPORT_SHARE_TTL_SECONDS,
+        build_report_store,
+        publish_report,
+        read_report_resource,
+    )
+
+    share_settings = replace(
+        configured_settings,
+        report_share_signing_secret="expiry-signing-secret-with-more-than-32-characters",
+        report_share_storage_backend="local",
+        report_share_local_dir=str(tmp_path / "reports"),
+    )
+    build_report_store.cache_clear()
+    created_at = 1_800_000_000
+    published = publish_report(
+        _minimal_report_bundle(),
+        share_settings,
+        public_base_url="https://api.example",
+        report_name="CENTRAL ANAYTICS",
+        report_period="três meses",
+        now=created_at,
+    )
+    content, media_type, _payload = read_report_resource(
+        published.token,
+        "index.html",
+        share_settings,
+        public_base_url="https://api.example",
+        now=created_at + REPORT_SHARE_TTL_SECONDS - 1,
+    )
+    assert media_type == "text/html"
+    assert b"doctype html" in content
+    with pytest.raises(Exception) as exc:
+        read_report_resource(
+            published.token,
+            "index.html",
+            share_settings,
+            public_base_url="https://api.example",
+            now=created_at + REPORT_SHARE_TTL_SECONDS,
+        )
+    assert getattr(exc.value, "status_code", None) == 410

@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Security
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import requests
 
@@ -46,8 +46,20 @@ from app.preview import (
     verify_download,
     verify_preview,
 )
-from app.security import require_api_token, validate_fracttal_bridge_url
+from app.security import (
+    require_api_token,
+    require_report_upload_token,
+    validate_fracttal_bridge_url,
+)
 from app.settings import Settings, load_settings
+from app.report_sharing import (
+    REPORT_SHARE_TTL_HOURS,
+    ReportBundleInvalid,
+    ReportStoreUnavailable,
+    publish_report,
+    read_report_resource,
+    revoke_report,
+)
 
 settings: Settings = load_settings()
 security = HTTPBearer(auto_error=False)
@@ -198,7 +210,7 @@ def _attachment_authorization(code: str, attachment_id: int) -> str | None:
 
 app = FastAPI(
     title="ERP Manutenção — API Central",
-    version="2.0.2",
+    version="2.1.0",
     docs_url="/docs" if settings.enable_docs else None,
     redoc_url="/redoc" if settings.enable_docs else None,
     openapi_url="/openapi.json" if settings.enable_docs else None,
@@ -213,9 +225,17 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Cache-Control"] = "no-store"
-    response.headers[
-        "Content-Security-Policy"
-    ] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    if request.url.path.startswith("/relatorios/"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+            "object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+        )
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    else:
+        response.headers[
+            "Content-Security-Policy"
+        ] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
@@ -296,7 +316,7 @@ def _legacy_bridge(url: str, token: str) -> list[Any]:
 @app.get("/health")
 def public_health() -> dict[str, str]:
     """Health check público, sem segredos ou acesso a integrações externas."""
-    return {"status": "ok", "service": "erp-central-api", "version": "2.0.2"}
+    return {"status": "ok", "service": "erp-central-api", "version": "2.1.0"}
 
 
 @app.get("/check_health")
@@ -304,7 +324,7 @@ def check_health_api(
     credentials: HTTPAuthorizationCredentials | None = Security(security),
 ):
     _authorize(credentials)
-    return {"status": "ok", "description": "Api check health", "version": "2.0.2"}
+    return {"status": "ok", "description": "Api check health", "version": "2.1.0"}
 
 
 @app.get("/api/executar")
@@ -566,4 +586,129 @@ def baixar_anexo_original(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+def _report_public_base_url(request: Request) -> str:
+    configured = settings.report_share_public_base_url
+    if configured:
+        return configured.rstrip("/")
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    if forwarded_proto in {"http", "https"} and forwarded_host:
+        return f"{forwarded_proto}://{forwarded_host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _report_link_error_page(title: str, message: str, *, status_code: int) -> HTMLResponse:
+    safe_title = title.replace("<", "&lt;").replace(">", "&gt;")
+    safe_message = message.replace("<", "&lt;").replace(">", "&gt;")
+    return HTMLResponse(
+        status_code=status_code,
+        content=f"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{safe_title}</title>
+<style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#07111f;color:#e8eef8;font-family:Arial,sans-serif}}main{{width:min(560px,calc(100% - 40px));padding:32px;border:1px solid #263852;border-radius:14px;background:#0d1a2b;box-shadow:0 24px 70px #0008}}span{{display:inline-block;padding:7px 10px;border-radius:999px;background:#f5b94218;color:#f5b942;font-size:12px;font-weight:800}}h1{{font-size:24px;margin:18px 0 10px}}p{{color:#aebbd0;line-height:1.6;margin:0}}small{{display:block;margin-top:20px;color:#718198}}</style></head>
+<body><main><span>CENTRAL ANAYTICS</span><h1>{safe_title}</h1><p>{safe_message}</p><small>Os links compartilhados são temporários e válidos por exatamente 48 horas.</small></main></body></html>""",
+    )
+
+
+@app.post("/api/reports/share", status_code=201)
+async def compartilhar_relatorio(
+    request: Request,
+    report_name: str | None = Header(None, alias="X-Report-Name"),
+    report_period: str | None = Header(None, alias="X-Report-Period"),
+    credentials: HTTPAuthorizationCredentials | None = Security(security),
+):
+    """Publica um pacote estático por 48 horas; somente este endpoint exige token."""
+    require_report_upload_token(credentials, settings)
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > settings.report_share_max_bundle_bytes:
+                raise HTTPException(status_code=413, detail="Pacote de relatório acima do limite permitido")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Content-Length inválido") from None
+    bundle = await request.body()
+    try:
+        published = publish_report(
+            bundle,
+            settings,
+            public_base_url=_report_public_base_url(request),
+            report_name=(report_name or "CENTRAL ANAYTICS")[:180],
+            report_period=(report_period or "Período não informado")[:180],
+        )
+    except ReportBundleInvalid as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ReportStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "share_url": published.public_url,
+        "share_token": published.token,
+        "created_at": published.created_at.isoformat(),
+        "expires_at": published.expires_at.isoformat(),
+        "valid_hours": REPORT_SHARE_TTL_HOURS,
+        "requires_credentials": False,
+        "message": "Link temporário criado. O acesso é público para quem possuir o link e expira automaticamente em 48 horas.",
+    }
+
+
+@app.delete("/api/reports/share/{share_token}")
+def revogar_relatorio_compartilhado(
+    share_token: str,
+    credentials: HTTPAuthorizationCredentials | None = Security(security),
+):
+    require_report_upload_token(credentials, settings)
+    try:
+        revoke_report(share_token, settings)
+    except ReportStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"success": True, "message": "Link compartilhado revogado."}
+
+
+@app.get("/relatorios/{share_token}", include_in_schema=False)
+def redirecionar_relatorio_compartilhado(share_token: str):
+    # A barra final preserva a resolução dos recursos relativos ./assets/* e
+    # ./report-data.json dentro do relatório estático.
+    return RedirectResponse(url=f"/relatorios/{share_token}/", status_code=307)
+
+
+@app.get("/relatorios/{share_token}/", include_in_schema=False)
+def abrir_relatorio_compartilhado(share_token: str, request: Request):
+    return recurso_relatorio_compartilhado(share_token, "index.html", request)
+
+
+@app.get("/relatorios/{share_token}/{resource_path:path}", include_in_schema=False)
+def recurso_relatorio_compartilhado(
+    share_token: str,
+    resource_path: str,
+    request: Request,
+):
+    try:
+        content, media_type, _payload = read_report_resource(
+            share_token,
+            resource_path,
+            settings,
+            public_base_url=_report_public_base_url(request),
+        )
+    except HTTPException as exc:
+        if exc.status_code == 410:
+            return _report_link_error_page(
+                "Link expirado",
+                "Este relatório deixou de ficar disponível porque o período de 48 horas foi encerrado.",
+                status_code=410,
+            )
+        if exc.status_code == 404:
+            return _report_link_error_page(
+                "Relatório indisponível",
+                "O link é inválido, foi revogado ou o relatório já não está disponível.",
+                status_code=404,
+            )
+        raise
+    except ReportStoreUnavailable:
+        return _report_link_error_page(
+            "Serviço temporariamente indisponível",
+            "Não foi possível carregar o relatório agora. Tente novamente em alguns instantes.",
+            status_code=503,
+        )
+    return Response(content=content, media_type=media_type)
 

@@ -1,0 +1,34 @@
+API CENTRAL — COMPARTILHAMENTO TEMPORÁRIO DO CENTRAL ANAYTICS
+=============================================================
+
+O link público é válido exatamente por 48 horas e não solicita credenciais ao
+destinatário. Somente a publicação e a revogação são protegidas.
+
+VARIÁVEIS PRIVADAS NO RENDER
+----------------------------
+REPORT_UPLOAD_TOKEN=<token longo e aleatório; copiar o mesmo valor para o ERP>
+REPORT_SHARE_SIGNING_SECRET=<outro segredo, com 32 ou mais caracteres>
+REPORT_SHARE_PUBLIC_BASE_URL=https://conversor-siff.onrender.com
+REPORT_SHARE_STORAGE_BACKEND=r2
+REPORT_SHARE_STORAGE_ENDPOINT_URL=https://SEU_ACCOUNT_ID.r2.cloudflarestorage.com
+REPORT_SHARE_STORAGE_REGION=auto
+REPORT_SHARE_STORAGE_BUCKET=<nome do bucket privado>
+REPORT_SHARE_STORAGE_ACCESS_KEY_ID=<chave privada do bucket>
+REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY=<segredo privado do bucket>
+
+NO ERP
+------
+Somente REPORT_UPLOAD_TOKEN deve ser copiado para:
+modules\automacoes_fracttal\.env
+como REPORT_SHARE_UPLOAD_TOKEN.
+
+NÃO copiar para o ERP, para o relatório ou para o link público:
+- REPORT_SHARE_SIGNING_SECRET;
+- REPORT_SHARE_STORAGE_ACCESS_KEY_ID;
+- REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY.
+
+BUCKET
+------
+O bucket deve permanecer privado. Recomenda-se configurar uma regra de ciclo de
+vida para excluir objetos após 2 dias. Independentemente dessa limpeza física,
+a API bloqueia o acesso no instante em que as 48 horas terminam.

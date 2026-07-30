@@ -18,3 +18,21 @@ services:
         value: "true"
       - key: ENABLE_API_DOCS
         value: "false"
+      - key: REPORT_UPLOAD_TOKEN
+        sync: false
+      - key: REPORT_SHARE_SIGNING_SECRET
+        sync: false
+      - key: REPORT_SHARE_PUBLIC_BASE_URL
+        value: "https://conversor-siff.onrender.com"
+      - key: REPORT_SHARE_STORAGE_BACKEND
+        value: "r2"
+      - key: REPORT_SHARE_STORAGE_ENDPOINT_URL
+        sync: false
+      - key: REPORT_SHARE_STORAGE_REGION
+        value: "auto"
+      - key: REPORT_SHARE_STORAGE_BUCKET
+        sync: false
+      - key: REPORT_SHARE_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY
+        sync: false

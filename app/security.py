@@ -51,3 +51,19 @@ def host_is_allowed(host: str | None, allowed_hosts: tuple[str, ...]) -> bool:
         elif normalized == rule:
             return True
     return False
+
+
+def require_report_upload_token(
+    credentials: HTTPAuthorizationCredentials | None,
+    settings: Settings,
+) -> None:
+    """Autoriza somente a publicação/revogação de relatórios.
+
+    Um token dedicado pode ser configurado em ``REPORT_UPLOAD_TOKEN``. Quando
+    ausente, a API mantém compatibilidade usando ``API_SECRET_TOKEN``. Nenhum
+    desses valores é inserido no relatório ou no link público.
+    """
+    expected = settings.report_upload_token or settings.api_secret_token
+    received = credentials.credentials if credentials is not None else ""
+    if not expected or not received or not secrets.compare_digest(received, expected):
+        raise HTTPException(status_code=401, detail="Token de publicação inválido ou não fornecido")
