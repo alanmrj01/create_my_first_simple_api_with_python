@@ -59,11 +59,20 @@ def require_report_upload_token(
 ) -> None:
     """Autoriza somente a publicação/revogação de relatórios.
 
-    Um token dedicado pode ser configurado em ``REPORT_UPLOAD_TOKEN``. Quando
-    ausente, a API mantém compatibilidade usando ``API_SECRET_TOKEN``. Nenhum
-    desses valores é inserido no relatório ou no link público.
+    Um token dedicado pode ser configurado em ``REPORT_UPLOAD_TOKEN``. A
+    credencial principal ``API_SECRET_TOKEN`` também permanece aceita para que
+    o ERP não dependa de uma segunda configuração. Nenhum desses valores é
+    inserido no relatório ou no link público.
     """
-    expected = settings.report_upload_token or settings.api_secret_token
+    expected_tokens = tuple(
+        token
+        for token in (settings.report_upload_token, settings.api_secret_token)
+        if token
+    )
     received = credentials.credentials if credentials is not None else ""
-    if not expected or not received or not secrets.compare_digest(received, expected):
+    authorized = bool(received) and any(
+        secrets.compare_digest(received, expected)
+        for expected in expected_tokens
+    )
+    if not authorized:
         raise HTTPException(status_code=401, detail="Token de publicação inválido ou não fornecido")

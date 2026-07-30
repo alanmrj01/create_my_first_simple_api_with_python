@@ -990,9 +990,11 @@ def test_report_share_creation_and_revocation_require_upload_token(client, confi
     denied = client.post("/api/reports/share", content=_minimal_report_bundle())
     assert denied.status_code == 401
 
+    # O token dedicado continua aceito. A credencial principal já usada pelo
+    # ERP também permanece válida, evitando uma segunda configuração local.
     created = client.post(
         "/api/reports/share",
-        headers={"Authorization": "Bearer dedicated-token", "Content-Type": "application/zip"},
+        headers={"Authorization": "Bearer test-secret", "Content-Type": "application/zip"},
         content=_minimal_report_bundle(),
     )
     assert created.status_code == 201

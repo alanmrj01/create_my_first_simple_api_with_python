@@ -196,5 +196,7 @@ as variáveis `REPORT_SHARE_*` descritas em `.env.example`. Recomenda-se também
 uma regra de ciclo de vida no bucket para apagar objetos após 2 dias. Mesmo sem
 a regra, a API rejeita o acesso assim que as 48 horas terminam.
 
-`REPORT_UPLOAD_TOKEN` deve ser diferente do segredo de assinatura. O mesmo
-`REPORT_UPLOAD_TOKEN` deve ser configurado no ERP local para publicar e revogar.
+`REPORT_UPLOAD_TOKEN` é opcional e deve ser diferente do segredo de assinatura.
+Quando ausente, publicação e revogação aceitam a credencial principal
+`API_SECRET_TOKEN`, que o ERP já utiliza. Quando um token dedicado for adotado,
+o mesmo valor pode ser configurado no ERP como `REPORT_SHARE_UPLOAD_TOKEN`.

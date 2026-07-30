@@ -1,34 +1,36 @@
-API CENTRAL — COMPARTILHAMENTO TEMPORÁRIO DO CENTRAL ANAYTICS
-=============================================================
+API CENTRAL — COMPARTILHAMENTO TEMPORÁRIO POR 48 HORAS
 
-O link público é válido exatamente por 48 horas e não solicita credenciais ao
-destinatário. Somente a publicação e a revogação são protegidas.
+AUTENTICAÇÃO DA PUBLICAÇÃO
 
-VARIÁVEIS PRIVADAS NO RENDER
-----------------------------
-REPORT_UPLOAD_TOKEN=<token longo e aleatório; copiar o mesmo valor para o ERP>
-REPORT_SHARE_SIGNING_SECRET=<outro segredo, com 32 ou mais caracteres>
-REPORT_SHARE_PUBLIC_BASE_URL=https://conversor-siff.onrender.com
-REPORT_SHARE_STORAGE_BACKEND=r2
-REPORT_SHARE_STORAGE_ENDPOINT_URL=https://SEU_ACCOUNT_ID.r2.cloudflarestorage.com
+A API aceita a credencial principal já configurada em API_SECRET_TOKEN. Assim,
+o ERP 44.1 funciona sem exigir uma segunda variável local.
+
+REPORT_UPLOAD_TOKEN permanece OPCIONAL. Quando configurado, ele cria uma
+credencial dedicada adicional para publicação e revogação; API_SECRET_TOKEN
+continua válido para preservar as instalações existentes.
+
+O destinatário do relatório não informa credenciais. O link contém apenas um
+token público aleatório e assinado, expira exatamente após 48 horas e pode ser
+revogado pelo ERP.
+
+SEGREDOS EXCLUSIVOS DO RENDER
+
+REPORT_SHARE_SIGNING_SECRET=<segredo longo, recomendado>
+REPORT_SHARE_STORAGE_ENDPOINT_URL=<endpoint do bucket privado>
+REPORT_SHARE_STORAGE_BUCKET=<nome do bucket>
+REPORT_SHARE_STORAGE_ACCESS_KEY_ID=<chave do bucket>
+REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY=<segredo do bucket>
 REPORT_SHARE_STORAGE_REGION=auto
-REPORT_SHARE_STORAGE_BUCKET=<nome do bucket privado>
-REPORT_SHARE_STORAGE_ACCESS_KEY_ID=<chave privada do bucket>
-REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY=<segredo privado do bucket>
+REPORT_SHARE_STORAGE_BACKEND=r2
+REPORT_SHARE_PUBLIC_BASE_URL=https://conversor-siff.onrender.com
 
-NO ERP
-------
-Somente REPORT_UPLOAD_TOKEN deve ser copiado para:
-modules\automacoes_fracttal\.env
-como REPORT_SHARE_UPLOAD_TOKEN.
+Esses valores nunca devem ser copiados para o ERP. Caso
+REPORT_SHARE_SIGNING_SECRET esteja ausente, a API mantém compatibilidade usando
+API_SECRET_TOKEN para assinar os links, mas o segredo dedicado é recomendado.
 
-NÃO copiar para o ERP, para o relatório ou para o link público:
-- REPORT_SHARE_SIGNING_SECRET;
-- REPORT_SHARE_STORAGE_ACCESS_KEY_ID;
-- REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY.
+REPORT_UPLOAD_TOKEN OPCIONAL
 
-BUCKET
-------
-O bucket deve permanecer privado. Recomenda-se configurar uma regra de ciclo de
-vida para excluir objetos após 2 dias. Independentemente dessa limpeza física,
-a API bloqueia o acesso no instante em que as 48 horas terminam.
+REPORT_UPLOAD_TOKEN=<token dedicado para publicar/revogar>
+
+Somente quando esse token opcional for usado, o mesmo valor poderá ser colocado
+no ERP como REPORT_SHARE_UPLOAD_TOKEN.
