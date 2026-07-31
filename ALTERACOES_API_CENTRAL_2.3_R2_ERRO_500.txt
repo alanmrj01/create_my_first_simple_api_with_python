@@ -1,0 +1,8 @@
+API CENTRAL 2.3 — CORREÇÃO CIRÚRGICA DO COMPARTILHAMENTO R2
+
+- Corrige o retorno genérico HTTP 500 quando o endpoint R2 está malformado.
+- Remove aspas e espaços externos comuns ao colar variáveis no Render.
+- Valida valores de exemplo antes de inicializar o boto3.
+- Traduz respostas do R2 para mensagens seguras e acionáveis, sem expor chaves.
+- Mantém o acesso público por token durante exatamente 48 horas.
+- Nenhuma rota existente, credencial pública ou regra do ERP foi alterada.

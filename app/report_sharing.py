@@ -13,16 +13,21 @@ from hashlib import sha256
 from io import BytesIO
 import hmac
 import json
+import logging
 import mimetypes
 from pathlib import Path, PurePosixPath
 import secrets
 import time
 from typing import Mapping, Protocol
+from urllib.parse import urlsplit
 import zipfile
 
 from fastapi import HTTPException
 
 from .settings import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 REPORT_SHARE_TTL_HOURS = 48
@@ -247,6 +252,99 @@ class LocalReportStore:
         target.with_suffix(target.suffix + ".metadata.json").unlink(missing_ok=True)
 
 
+def _r2_endpoint(settings: Settings) -> str | None:
+    endpoint = (settings.report_share_storage_endpoint_url or "").strip().rstrip("/")
+    if settings.report_share_storage_backend.strip().lower() != "r2":
+        return endpoint or None
+    if not endpoint:
+        raise ReportStoreUnavailable(
+            "Armazenamento privado não configurado: REPORT_SHARE_STORAGE_ENDPOINT_URL"
+        )
+    upper = endpoint.upper()
+    if any(marker in upper for marker in ("SEU_ACCOUNT_ID", "ACCOUNT_ID", "<ACCOUNT", "COLE_")):
+        raise ReportStoreUnavailable(
+            "REPORT_SHARE_STORAGE_ENDPOINT_URL ainda contém um valor de exemplo. "
+            "Use o endpoint S3 real exibido no R2, no formato "
+            "https://ID_DA_CONTA.r2.cloudflarestorage.com."
+        )
+    parsed = urlsplit(endpoint)
+    hostname = (parsed.hostname or "").lower()
+    valid_path = parsed.path in {"", "/"}
+    valid_host = hostname.endswith(".r2.cloudflarestorage.com")
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or parsed.port not in {None, 443}
+        or not valid_path
+        or parsed.query
+        or parsed.fragment
+        or not valid_host
+        or "_" in hostname
+    ):
+        raise ReportStoreUnavailable(
+            "REPORT_SHARE_STORAGE_ENDPOINT_URL inválido. Informe somente o endpoint S3 do R2, "
+            "sem nome do bucket, caminho ou parâmetros: "
+            "https://ID_DA_CONTA.r2.cloudflarestorage.com."
+        )
+    return endpoint
+
+
+def _storage_error_code(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error")
+        if isinstance(error, dict):
+            return str(error.get("Code") or "").strip()
+    return ""
+
+
+def _storage_error(operation: str, exc: Exception) -> ReportStoreUnavailable:
+    code = _storage_error_code(exc)
+    kind = type(exc).__name__
+    logger.warning(
+        "report_share_storage_failure operation=%s exception=%s code=%s",
+        operation,
+        kind,
+        code or "none",
+    )
+    if code in {"InvalidAccessKeyId", "InvalidToken"}:
+        message = (
+            "O R2 recusou REPORT_SHARE_STORAGE_ACCESS_KEY_ID. Copie o Access Key ID "
+            "gerado em R2 > Manage R2 API Tokens; não use o token comum da Cloudflare."
+        )
+    elif code in {"SignatureDoesNotMatch", "AuthorizationHeaderMalformed"}:
+        message = (
+            "O R2 recusou a assinatura. Confira REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY, "
+            "o endpoint da mesma conta e REPORT_SHARE_STORAGE_REGION=auto."
+        )
+    elif code in {"AccessDenied", "Unauthorized", "Forbidden", "403"}:
+        message = (
+            "O token do R2 não possui acesso ao bucket informado. Use Object Read & Write "
+            "e inclua exatamente o bucket configurado."
+        )
+    elif code in {"NoSuchBucket", "InvalidBucketName"}:
+        message = (
+            "O bucket configurado não foi encontrado. Confira REPORT_SHARE_STORAGE_BUCKET "
+            "e a conta correspondente ao endpoint do R2."
+        )
+    elif kind in {"EndpointConnectionError", "ConnectTimeoutError", "ReadTimeoutError"}:
+        message = (
+            "A API não conseguiu alcançar o endpoint do R2. Confira o Account ID e use "
+            "https://ID_DA_CONTA.r2.cloudflarestorage.com, sem o nome do bucket."
+        )
+    elif kind in {"ParamValidationError", "ValueError", "InvalidEndpointURL", "EndpointResolutionError"}:
+        message = (
+            "A configuração do R2 possui formato inválido. Confira endpoint, bucket, Access Key ID "
+            "e remova aspas ou valores de exemplo das variáveis do Render."
+        )
+    else:
+        suffix = f" (código do provedor: {code})" if code else ""
+        message = f"O armazenamento privado recusou a operação de {operation}{suffix}."
+    return ReportStoreUnavailable(message)
+
+
 class S3ReportStore:
     """Bucket privado S3/R2; nenhuma credencial é devolvida ao navegador."""
 
@@ -267,15 +365,30 @@ class S3ReportStore:
             raise ReportStoreUnavailable(
                 "Armazenamento privado não configurado: " + ", ".join(missing)
             )
-        self.bucket = str(settings.report_share_storage_bucket)
-        self.client = boto3.client(
-            "s3",
-            endpoint_url=settings.report_share_storage_endpoint_url or None,
-            aws_access_key_id=settings.report_share_storage_access_key_id,
-            aws_secret_access_key=settings.report_share_storage_secret_access_key,
-            region_name=settings.report_share_storage_region or "auto",
-            config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
-        )
+        self.bucket = str(settings.report_share_storage_bucket).strip()
+        if not self.bucket or any(marker in self.bucket.upper() for marker in ("SEU_", "COLE_", "<BUCKET")):
+            raise ReportStoreUnavailable(
+                "REPORT_SHARE_STORAGE_BUCKET ainda contém um valor de exemplo ou está vazio."
+            )
+        try:
+            self.client = boto3.client(
+                "s3",
+                endpoint_url=_r2_endpoint(settings),
+                aws_access_key_id=settings.report_share_storage_access_key_id,
+                aws_secret_access_key=settings.report_share_storage_secret_access_key,
+                region_name=settings.report_share_storage_region or "auto",
+                config=Config(
+                    signature_version="s3v4",
+                    retries={"max_attempts": 3, "mode": "standard"},
+                    s3={"addressing_style": "path"},
+                    connect_timeout=10,
+                    read_timeout=45,
+                ),
+            )
+        except ReportStoreUnavailable:
+            raise
+        except Exception as exc:
+            raise _storage_error("configuração", exc) from exc
 
     def put(self, object_key: str, data: bytes, metadata: Mapping[str, str]) -> None:
         try:
@@ -288,23 +401,23 @@ class S3ReportStore:
                 Metadata={str(key): str(value) for key, value in metadata.items()},
             )
         except Exception as exc:  # boto3 usa uma hierarquia extensa de exceções
-            raise ReportStoreUnavailable("Não foi possível gravar o relatório no armazenamento privado.") from exc
+            raise _storage_error("gravação", exc) from exc
 
     def get(self, object_key: str) -> bytes:
         try:
             response = self.client.get_object(Bucket=self.bucket, Key=object_key)
             return response["Body"].read()
         except Exception as exc:
-            code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+            code = _storage_error_code(exc)
             if code in {"NoSuchKey", "404", "NotFound"}:
                 raise ReportObjectNotFound(object_key) from exc
-            raise ReportStoreUnavailable("O armazenamento privado do relatório está indisponível.") from exc
+            raise _storage_error("leitura", exc) from exc
 
     def delete(self, object_key: str) -> None:
         try:
             self.client.delete_object(Bucket=self.bucket, Key=object_key)
         except Exception as exc:
-            raise ReportStoreUnavailable("Não foi possível revogar o relatório compartilhado.") from exc
+            raise _storage_error("revogação", exc) from exc
 
 
 @lru_cache(maxsize=8)

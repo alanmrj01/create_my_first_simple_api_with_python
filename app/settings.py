@@ -45,6 +45,18 @@ def _float_env(name: str, default: float, minimum: float, maximum: float) -> flo
     return max(minimum, min(maximum, value))
 
 
+
+
+def _optional_env(name: str) -> str | None:
+    """Lê segredo/configuração removendo apenas ruído comum do painel do Render."""
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
+        value = value[1:-1].strip()
+    return value or None
+
 def _csv_env(name: str, default: str) -> tuple[str, ...]:
     raw = os.getenv(name, default)
     return tuple(item.strip().lower() for item in raw.split(",") if item.strip())
@@ -97,7 +109,7 @@ def load_settings() -> Settings:
         "DOCUMENT_OCR_WITH_GEMINI", False
     )
     return Settings(
-        api_secret_token=os.getenv("API_SECRET_TOKEN") or None,
+        api_secret_token=_optional_env("API_SECRET_TOKEN"),
         fracttal_base_url=os.getenv(
             "FRACTTAL_BASE_URL", "https://app.fracttal.com/api"
         ).rstrip("/"),
@@ -135,26 +147,26 @@ def load_settings() -> Settings:
         ).strip(),
         ocr_with_gemini=ocr_enabled,
         enable_docs=_bool_env("ENABLE_API_DOCS", False),
-        report_upload_token=os.getenv("REPORT_UPLOAD_TOKEN") or None,
-        report_share_signing_secret=os.getenv("REPORT_SHARE_SIGNING_SECRET") or None,
+        report_upload_token=_optional_env("REPORT_UPLOAD_TOKEN"),
+        report_share_signing_secret=_optional_env("REPORT_SHARE_SIGNING_SECRET"),
         report_share_public_base_url=(
-            os.getenv("REPORT_SHARE_PUBLIC_BASE_URL", "").strip().rstrip("/") or None
+            (_optional_env("REPORT_SHARE_PUBLIC_BASE_URL") or "").rstrip("/") or None
         ),
         report_share_storage_backend=os.getenv(
             "REPORT_SHARE_STORAGE_BACKEND", "r2"
         ).strip().lower(),
         report_share_storage_endpoint_url=(
-            os.getenv("REPORT_SHARE_STORAGE_ENDPOINT_URL", "").strip().rstrip("/") or None
+            (_optional_env("REPORT_SHARE_STORAGE_ENDPOINT_URL") or "").rstrip("/") or None
         ),
         report_share_storage_region=os.getenv(
             "REPORT_SHARE_STORAGE_REGION", "auto"
         ).strip() or "auto",
-        report_share_storage_bucket=os.getenv("REPORT_SHARE_STORAGE_BUCKET") or None,
+        report_share_storage_bucket=_optional_env("REPORT_SHARE_STORAGE_BUCKET"),
         report_share_storage_access_key_id=(
-            os.getenv("REPORT_SHARE_STORAGE_ACCESS_KEY_ID") or None
+            _optional_env("REPORT_SHARE_STORAGE_ACCESS_KEY_ID")
         ),
         report_share_storage_secret_access_key=(
-            os.getenv("REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY") or None
+            _optional_env("REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY")
         ),
         report_share_local_dir=os.getenv(
             "REPORT_SHARE_LOCAL_DIR", ".report-share-storage"

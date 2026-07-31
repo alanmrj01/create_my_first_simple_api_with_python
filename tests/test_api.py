@@ -1049,3 +1049,40 @@ def test_report_token_expires_exactly_after_48_hours(configured_settings, tmp_pa
             now=created_at + REPORT_SHARE_TTL_SECONDS,
         )
     assert getattr(exc.value, "status_code", None) == 410
+
+
+def test_report_share_malformed_r2_endpoint_returns_actionable_503(client, configured_settings, monkeypatch):
+    from app.report_sharing import build_report_store
+
+    broken = replace(
+        configured_settings,
+        report_share_signing_secret="signing-secret-long-enough-for-the-test",
+        report_share_storage_backend="r2",
+        report_share_storage_endpoint_url="https://SEU_ACCOUNT_ID.r2.cloudflarestorage.com",
+        report_share_storage_bucket="central-analytics-reports",
+        report_share_storage_access_key_id="access-key",
+        report_share_storage_secret_access_key="secret-key",
+    )
+    monkeypatch.setattr(main, "settings", broken)
+    build_report_store.cache_clear()
+    response = client.post(
+        "/api/reports/share",
+        headers={"Authorization": "Bearer test-secret", "Content-Type": "application/zip"},
+        content=_minimal_report_bundle(),
+    )
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "valor de exemplo" in detail
+    assert "Internal Server Error" not in detail
+
+
+def test_report_share_strips_quotes_from_render_environment(monkeypatch):
+    monkeypatch.setenv("REPORT_SHARE_STORAGE_ENDPOINT_URL", '"https://abc123.r2.cloudflarestorage.com"')
+    monkeypatch.setenv("REPORT_SHARE_STORAGE_BUCKET", '"central-analytics-reports"')
+    monkeypatch.setenv("REPORT_SHARE_STORAGE_ACCESS_KEY_ID", '"access-key"')
+    monkeypatch.setenv("REPORT_SHARE_STORAGE_SECRET_ACCESS_KEY", '"secret-key"')
+    loaded = load_settings()
+    assert loaded.report_share_storage_endpoint_url == "https://abc123.r2.cloudflarestorage.com"
+    assert loaded.report_share_storage_bucket == "central-analytics-reports"
+    assert loaded.report_share_storage_access_key_id == "access-key"
+    assert loaded.report_share_storage_secret_access_key == "secret-key"
